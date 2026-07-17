@@ -1,0 +1,48 @@
+:root {
+  --bg: #0a0e1a;
+  --bg-elevated: #10162a;
+  --border: #1f2740;
+  --text: #e5e9f5;
+  --text-muted: #8b93ab;
+  --accent-blue: #3b82f6;
+  --accent-green: #22c55e;
+  --accent-gradient: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
+  --danger: #ef4444;
+  --success: #22c55e;
+
+  color-scheme: dark;
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+}
+
+p,
+dl,
+dd {
+  margin: 0;
+}

@@ -1,0 +1,29 @@
+# Environment / secrets
+.env
+.env.local
+*.pem
+*.key
+
+# Go
+/bin/
+*.exe
+*.test
+*.out
+
+# Python
+services/dl_engine/venv/
+services/dl_engine/__pycache__/
+services/dl_engine/**/__pycache__/
+services/dl_engine/*.egg-info/
+services/dl_engine/models/*.onnx
+services/dl_engine/models/*.h5
+services/dl_engine/models/*.pt
+
+# Docker / data volumes
+pgdata/
+redisdata/
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
