@@ -125,7 +125,12 @@ type brokerAccountResult struct {
 type brokerStatus struct {
 	Broker  models.BrokerName `json:"broker"`
 	Account *models.Account   `json:"account,omitempty"`
-	Error   string            `json:"error,omitempty"`
+	// EquityUSD is Account.Equity converted to USD via the same rate
+	// engine.AggregateBalances uses, so clients can build a cross-broker
+	// allocation breakdown without re-implementing (or guessing at) the
+	// CAD/USD conversion themselves.
+	EquityUSD *float64 `json:"equity_usd,omitempty"`
+	Error     string   `json:"error,omitempty"`
 }
 
 type balanceResponse struct {
@@ -160,7 +165,8 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 			statuses[i] = brokerStatus{Broker: res.broker, Error: res.err.Error()}
 			continue
 		}
-		statuses[i] = brokerStatus{Broker: res.broker, Account: &res.account}
+		equityUSD := res.account.Equity * engine.USDRate(res.account.Currency, s.USDCADRate)
+		statuses[i] = brokerStatus{Broker: res.broker, Account: &res.account, EquityUSD: &equityUSD}
 		accounts = append(accounts, res.account)
 	}
 

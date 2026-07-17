@@ -1,6 +1,6 @@
 # VOT Tradings — Web Client
 
-React + TypeScript + Vite dashboard for the VOT Tradings gateway (`cmd/main_gateway`). Read-only for now: system health and the unified cross-broker balance view.
+React + TypeScript + Tailwind v4 client for the VOT Tradings gateway (`cmd/main_gateway`). Five-page shell matching the platform's target IA — see [Current scope](#current-scope) for what's real vs. pending backend.
 
 ## Setup
 
@@ -20,12 +20,30 @@ Requires the Go gateway running and reachable (default `http://localhost:8080`),
 - `npm run preview` — serve the production build locally
 - `npm run lint` — Oxlint
 
+## Brand tokens
+
+Defined in `src/index.css` via Tailwind v4's `@theme`: `--color-canvas` (#0B0E14), `--color-surface` (#1A1D26), `--color-elevated` (#242936), `--color-fg` / `--color-fg-muted`, `--color-bull` (#0ECB81), `--color-bear` (#F6465D), `--color-accent` (#3B82F6). Generates standard Tailwind utilities (`bg-canvas`, `text-bull`, etc.) — no separate `tailwind.config.js` needed under v4's CSS-first config.
+
 ## Structure
 
-- `src/lib/api.ts`, `src/lib/types.ts` — typed client for the gateway's JSON API; keep in sync with `internal/httpapi/httpapi.go`
-- `src/components/` — `Header` (brand logo, served by the gateway at `/logo.png`), `Dashboard`, `StatusPill`, `StatTile`, `BrokerCard`
-- `src/hooks/usePolling.ts` — fixed-interval polling hook used for health and balance data
+- `src/pages/` — `Dashboard`, `Market`, `Intelligence`, `Trade`, `Settings`, routed in `App.tsx`
+- `src/context/PortfolioContext.tsx` — single shared poll of `/healthz` + `/api/v1/balance`, consumed by any page via `usePortfolio()`
+- `src/hooks/usePolling.ts` — the underlying fixed-interval polling hook
+- `src/hooks/useAlpacaStream.ts`, `useOandaStream.ts`, `useInference.ts` — **stubs**. Each always returns `{ connected: false, reason: 'not_implemented' }`; they exist as the landing spot for real streaming/inference work later, not as working data sources today
+- `src/components/layout/` — `NavBar`, `AppLayout`
+- `src/components/ui/` — `Card`, `StatTile`, `StatusBadge`, `NotConnected` (the "this feature has no backend yet" panel used throughout Market/Intelligence/Trade)
+- `src/components/charts/AllocationDonut.tsx` — per-broker USD allocation, computed from the gateway's `equity_usd` field (never a client-side guess at FX conversion)
+- `src/components/trading/BrokerAccountCard.tsx` — per-broker connected/error card
+- `src/lib/api.ts`, `src/lib/types.ts` — typed gateway client; keep in sync with `internal/httpapi/httpapi.go`
 
 ## Current scope
 
-Only what the gateway currently exposes: `/healthz` and `/api/v1/balance`. There's no order entry or position management UI yet — the gateway itself doesn't expose those endpoints (see root `README.md` for what's implemented vs. planned).
+| Page | Status |
+|---|---|
+| `/dashboard` | Real — NAV, cross-border split, allocation chart, all from `/api/v1/balance` |
+| `/settings` | Real — broker connectivity audit from the same endpoint |
+| `/market/:symbol` | Layout only — candlesticks/L2/indicators all show `NotConnected`; needs a streaming backend |
+| `/intelligence` | Layout only — needs the Python DL engine (`services/dl_engine`, currently empty) |
+| `/trade` | Cash-by-currency is real; the order ticket and PDT shield show `NotConnected` — needs an order-execution HTTP endpoint |
+
+Nothing in this app fabricates data for a feature the backend doesn't support — see each page's `NotConnected` panels for exactly what's missing and where.

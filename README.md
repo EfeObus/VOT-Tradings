@@ -18,13 +18,13 @@ This section reflects what actually runs today, not the target architecture. See
 - Cross-broker unified balance engine and FINRA Pattern Day Trader check (`internal/engine/`)
 - Postgres-backed persistence for Questrade's rotating OAuth refresh token (`internal/db/oauth_tokens.go`) — without this, a process restart burns Questrade access, since its refresh tokens are single-use
 - HTTP API: `GET /healthz`, `GET /api/v1/balance`, `GET /logo.png` (see [Gateway HTTP API](#gateway-http-api))
-- Web dashboard (`web/`) — React + TypeScript, consumes the two endpoints above, polls on a 15s interval
+- Web client (`web/`) — React + TypeScript + Tailwind, five-page shell (`/dashboard`, `/market/:symbol`, `/intelligence`, `/trade`, `/settings`) matching the platform's target IA. **Dashboard** (unified NAV, cross-border split, per-broker USD allocation donut) and **Settings** (broker connectivity audit) are fully real, backed by the gateway. **Market**, **Intelligence**, and **Trade** render the correct layout but each panel explicitly states what backend piece it's waiting on — see below — rather than showing placeholder/fabricated numbers.
 - Local dev infra: `docker-compose.yml` (Postgres + Redis Stack)
 
-**Not yet built** (described below as the target architecture):
-- Python DL engine (`services/dl_engine/`) — LSTM/Transformer forecasters, RL execution optimizer, ONNX inference, self-correcting feedback loop
-- Real-time streaming ingestion pipeline (`cmd/data_pipeline/`) — Kafka, WebSocket market data fan-out
-- Order entry / position management in the web client — the gateway doesn't expose those endpoints yet, so the UI doesn't either
+**Not yet built** (described below as the target architecture, and stated inline in the web client's Market/Intelligence/Trade pages via their `NotConnected` panels):
+- Python DL engine (`services/dl_engine/`) — LSTM/Transformer forecasters, RL execution optimizer, ONNX inference, self-correcting feedback loop. Blocks: Intelligence page's forecasting matrix, confidence tracking, self-correction log.
+- Real-time streaming ingestion pipeline (`cmd/data_pipeline/`) — Kafka, WebSocket market data fan-out. Blocks: Market page's candlestick stream, Level 2 depth, indicator overlays.
+- Order-execution HTTP endpoint — `PlaceOrder` exists per-broker (`internal/brokerage/`) but the gateway doesn't expose it over HTTP, and `internal/engine/pdt.go`'s PDT check isn't wired to the API either. Blocks: Trade page's order ticket and PDT risk shield.
 - Production safeguards described in [Production Considerations](#production-considerations-and-security-guardrails): CAD/USD slippage cushion, DL engine circuit breaker, at-rest key encryption
 
 **Operational notes if you're running this locally:**
@@ -151,7 +151,14 @@ vot-tradings/
 │   └── models/                  # Shared domain types
 ├── pkg/
 │   └── logger/                  # Structured slog logger
-├── web/                        # React + TypeScript dashboard (implemented)
+├── web/                        # React + TypeScript + Tailwind client (implemented)
+│   └── src/
+│       ├── pages/               # Dashboard, Market, Intelligence, Trade, Settings
+│       ├── context/             # PortfolioContext — shared poll of health + balance
+│       ├── hooks/                # usePolling (live); useAlpacaStream/useOandaStream/
+│       │                          # useInference (stubs — see Current Implementation Status)
+│       ├── components/           # layout/, ui/, charts/, trading/
+│       └── lib/                  # Typed gateway API client
 ├── assets/
 │   └── logo.png                 # Canonical app logo — served by the gateway at /logo.png
 ├── services/
@@ -223,7 +230,7 @@ cd services/dl_engine
 | Method | Path                | Description |
 |--------|----------------------|--------------|
 | GET    | `/healthz`            | Pings Postgres and Redis; `200` if both are reachable, `503` otherwise. |
-| GET    | `/api/v1/balance`      | Fans out to every configured broker concurrently, returns each broker's account or error, plus a USD-unified rollup (`internal/engine.AggregateBalances`). |
+| GET    | `/api/v1/balance`      | Fans out to every configured broker concurrently, returns each broker's account/error plus its USD-converted equity (`equity_usd`, via `internal/engine.USDRate`), and a USD-unified rollup (`internal/engine.AggregateBalances`). |
 | GET    | `/logo.png`            | Serves `assets/logo.png` — the single canonical app logo; clients should reference this endpoint rather than bundling their own copy. |
 
 CORS is allow-listed by exact origin via `CORS_ALLOWED_ORIGINS` (comma-separated) — origins not on the list get no CORS headers and are blocked by the browser as usual.

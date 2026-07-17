@@ -30,6 +30,7 @@ export interface UnifiedBalance {
 export interface BrokerStatus {
   broker: BrokerName
   account?: Account
+  equity_usd?: number
   error?: string
 }
 

@@ -1,17 +1,16 @@
-:root {
-  --bg: #0a0e1a;
-  --bg-elevated: #10162a;
-  --border: #1f2740;
-  --text: #e5e9f5;
-  --text-muted: #8b93ab;
-  --accent-blue: #3b82f6;
-  --accent-green: #22c55e;
-  --accent-gradient: linear-gradient(135deg, var(--accent-blue), var(--accent-green));
-  --danger: #ef4444;
-  --success: #22c55e;
+@import 'tailwindcss';
 
-  color-scheme: dark;
-  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
+/* Brand tokens — VOT Tradings ultra-dark financial palette. */
+@theme {
+  --color-canvas: #0b0e14;
+  --color-surface: #1a1d26;
+  --color-elevated: #242936;
+  --color-fg: #e4e6eb;
+  --color-fg-muted: #848e9c;
+  --color-bull: #0ecb81;
+  --color-bear: #f6465d;
+  --color-accent: #3b82f6;
+  --color-border: #2a2f3d;
 }
 
 *,
@@ -28,8 +27,9 @@ body,
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
+  background: var(--color-canvas);
+  color: var(--color-fg);
+  font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
