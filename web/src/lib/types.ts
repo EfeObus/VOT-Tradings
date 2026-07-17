@@ -38,3 +38,11 @@ export interface BalanceResponse {
   unified: UnifiedBalance
   brokers: BrokerStatus[]
 }
+
+export interface Quote {
+  broker: BrokerName
+  symbol: string
+  bid: number
+  ask: number
+  timestamp: number
+}

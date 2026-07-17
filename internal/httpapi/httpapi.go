@@ -48,6 +48,7 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
 	mux.HandleFunc("GET /api/v1/balance", s.handleBalance)
+	mux.HandleFunc("GET /api/v1/quote", s.handleQuote)
 	mux.HandleFunc("GET /logo.png", s.handleLogo)
 	return s.withCORS(mux)
 }
@@ -175,6 +176,56 @@ func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, balanceResponse{
 		Unified: unified,
 		Brokers: statuses,
+	})
+}
+
+type quoteResponse struct {
+	Broker    models.BrokerName `json:"broker"`
+	Symbol    string            `json:"symbol"`
+	Bid       float64           `json:"bid"`
+	Ask       float64           `json:"ask"`
+	Timestamp int64             `json:"timestamp"`
+}
+
+// handleQuote looks up a single on-demand quote from one broker. This is a
+// synchronous REST call to the broker, not a stream — see the web client's
+// Market page for why that distinction matters (no live tick feed exists).
+func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
+	brokerName := r.URL.Query().Get("broker")
+	symbol := r.URL.Query().Get("symbol")
+	if brokerName == "" || symbol == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "both broker and symbol query params are required"})
+		return
+	}
+
+	var target brokerage.Broker
+	for _, b := range s.Brokers {
+		if string(b.Name()) == brokerName {
+			target = b
+			break
+		}
+	}
+	if target == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown broker: " + brokerName})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	quote, err := target.GetQuote(ctx, symbol)
+	if err != nil {
+		s.Logger.Warn("quote: fetch failed", "broker", brokerName, "symbol", symbol, "error", err)
+		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, quoteResponse{
+		Broker:    target.Name(),
+		Symbol:    quote.Symbol,
+		Bid:       quote.Bid,
+		Ask:       quote.Ask,
+		Timestamp: quote.Timestamp,
 	})
 }
 

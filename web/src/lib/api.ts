@@ -1,4 +1,4 @@
-import type { BalanceResponse, HealthStatus } from './types'
+import type { BalanceResponse, HealthStatus, Quote } from './types'
 
 export const API_BASE_URL: string =
   import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
@@ -17,10 +17,12 @@ export class ApiError extends Error {
 
 async function request<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE_URL}${path}`)
+  const body = await res.json().catch(() => null)
   if (!res.ok) {
-    throw new ApiError(`${path} responded with ${res.status}`, res.status)
+    const message = body && typeof body === 'object' && 'error' in body ? String(body.error) : `${path} responded with ${res.status}`
+    throw new ApiError(message, res.status)
   }
-  return (await res.json()) as T
+  return body as T
 }
 
 export function getHealth(): Promise<HealthStatus> {
@@ -29,4 +31,9 @@ export function getHealth(): Promise<HealthStatus> {
 
 export function getBalance(): Promise<BalanceResponse> {
   return request<BalanceResponse>('/api/v1/balance')
+}
+
+export function getQuote(broker: string, symbol: string): Promise<Quote> {
+  const params = new URLSearchParams({ broker, symbol })
+  return request<Quote>(`/api/v1/quote?${params.toString()}`)
 }

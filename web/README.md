@@ -26,7 +26,7 @@ Defined in `src/index.css` via Tailwind v4's `@theme`: `--color-canvas` (#0B0E14
 
 ## Structure
 
-- `src/pages/` — `Dashboard`, `Market`, `Intelligence`, `Trade`, `Settings`, routed in `App.tsx`
+- `src/pages/` — `Profile`, `Dashboard`, `Funds`, `Market`, `Trade`, `Forecasts`, `Reports`, `Settings`, routed in `App.tsx`
 - `src/context/PortfolioContext.tsx` — single shared poll of `/healthz` + `/api/v1/balance`, consumed by any page via `usePortfolio()`
 - `src/hooks/usePolling.ts` — the underlying fixed-interval polling hook
 - `src/hooks/useAlpacaStream.ts`, `useOandaStream.ts`, `useInference.ts` — **stubs**. Each always returns `{ connected: false, reason: 'not_implemented' }`; they exist as the landing spot for real streaming/inference work later, not as working data sources today
@@ -42,8 +42,11 @@ Defined in `src/index.css` via Tailwind v4's `@theme`: `--color-canvas` (#0B0E14
 |---|---|
 | `/dashboard` | Real — NAV, cross-border split, allocation chart, all from `/api/v1/balance` |
 | `/settings` | Real — broker connectivity audit from the same endpoint |
-| `/market/:symbol` | Layout only — candlesticks/L2/indicators all show `NotConnected`; needs a streaming backend |
-| `/intelligence` | Layout only — needs the Python DL engine (`services/dl_engine`, currently empty) |
+| `/market/:symbol` | Real on-demand quote lookup (`GET /api/v1/quote`) — a REST snapshot, not a stream. Candlesticks/L2/indicators below it show `NotConnected` |
 | `/trade` | Cash-by-currency is real; the order ticket and PDT shield show `NotConnected` — needs an order-execution HTTP endpoint |
+| `/funds` | Real external links to each broker's own funding portal — deposits/withdrawals aren't reimplemented in-app, deliberately (see root README) |
+| `/profile` | Honest disclosure only: the gateway has no authentication, and states that plainly rather than showing a cosmetic login form |
+| `/forecasts` | Layout only — needs the Python DL engine (`services/dl_engine`, currently empty) |
+| `/reports` | Layout only — needs orders to actually be persisted, which needs the order-execution API first |
 
 Nothing in this app fabricates data for a feature the backend doesn't support — see each page's `NotConnected` panels for exactly what's missing and where.

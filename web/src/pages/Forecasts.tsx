@@ -1,9 +1,9 @@
 import { NotConnected } from '../components/ui/NotConnected'
 
-export function Intelligence() {
+export function Forecasts() {
   return (
     <div className="flex flex-col gap-6">
-      <h1 className="text-2xl font-bold text-fg">AI Inference Telemetry</h1>
+      <h1 className="text-2xl font-bold text-fg">Forecasts (AI)</h1>
 
       <NotConnected
         title="LSTM forecasting matrix (T+5 / T+15 / T+60)"
