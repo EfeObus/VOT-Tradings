@@ -111,3 +111,13 @@ type DayTrade struct {
 	Symbol    string    `json:"symbol" db:"symbol"`
 	TradeDate time.Time `json:"trade_date" db:"trade_date"`
 }
+
+// User is a registered VOT Tradings account holder. PasswordHash is never
+// serialized to JSON — callers must not accidentally leak it in an API
+// response.
+type User struct {
+	ID           string    `json:"id" db:"id"`
+	Email        string    `json:"email" db:"email"`
+	PasswordHash string    `json:"-" db:"password_hash"`
+	CreatedAt    time.Time `json:"created_at" db:"created_at"`
+}

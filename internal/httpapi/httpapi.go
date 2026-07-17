@@ -1,7 +1,7 @@
-// Package httpapi exposes the VOT Tradings gateway's HTTP surface: health
-// checks for the orchestrator/load balancer, and the unified cross-broker
-// balance view described in the middleware core's "Buying Power Compute
-// Engine".
+// Package httpapi exposes the VOT Tradings gateway's HTTP surface: auth,
+// health checks, per-user broker credential management, and the unified
+// cross-broker balance/quote views built from each user's own connected
+// brokers.
 package httpapi
 
 import (
@@ -10,24 +10,28 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 
-	"vot-tradings/internal/brokerage"
-	"vot-tradings/internal/engine"
-	"vot-tradings/internal/models"
+	"vot-tradings/internal/auth"
+	"vot-tradings/internal/config"
+	"vot-tradings/internal/db"
+	"vot-tradings/internal/userbrokers"
 )
 
 // Server holds the dependencies the HTTP handlers need to serve requests.
 type Server struct {
-	Brokers    []brokerage.Broker
-	DB         *pgxpool.Pool
-	Cache      *redis.Client
-	Logger     *slog.Logger
-	USDCADRate float64
+	DB      *pgxpool.Pool
+	Cache   *redis.Client
+	Logger  *slog.Logger
+	Config  config.Config
+
+	Users       *db.UserStore
+	Sessions    *auth.SessionStore
+	Credentials *db.CredentialStore
+	Brokers     *userbrokers.Factory
 
 	// AssetsDir is the directory brand assets (e.g. logo.png) are served
 	// from. See assets/logo.png — the single canonical app logo; the web
@@ -47,15 +51,28 @@ type Server struct {
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
-	mux.HandleFunc("GET /api/v1/balance", s.handleBalance)
-	mux.HandleFunc("GET /api/v1/quote", s.handleQuote)
 	mux.HandleFunc("GET /logo.png", s.handleLogo)
+
+	mux.HandleFunc("POST /api/v1/auth/register", s.handleRegister)
+	mux.HandleFunc("POST /api/v1/auth/login", s.handleLogin)
+	mux.HandleFunc("POST /api/v1/auth/logout", s.handleLogout)
+	mux.HandleFunc("GET /api/v1/auth/me", s.requireAuth(s.handleMe))
+
+	mux.HandleFunc("GET /api/v1/broker-credentials", s.requireAuth(s.handleListBrokerCredentials))
+	mux.HandleFunc("POST /api/v1/broker-credentials", s.requireAuth(s.handleSaveBrokerCredential))
+	mux.HandleFunc("DELETE /api/v1/broker-credentials", s.requireAuth(s.handleDeleteBrokerCredential))
+	mux.HandleFunc("POST /api/v1/broker-credentials/import-env", s.requireAuth(s.handleImportEnvCredentials))
+
+	mux.HandleFunc("GET /api/v1/balance", s.requireAuth(s.handleBalance))
+	mux.HandleFunc("GET /api/v1/quote", s.requireAuth(s.handleQuote))
+
 	return s.withCORS(mux)
 }
 
 // withCORS allows exactly the configured origins to read gateway responses
-// from a browser. Origins not on the list get no CORS headers at all, so
-// the browser's same-origin policy keeps blocking them by default.
+// from a browser, and to send the session cookie cross-origin. Origins not
+// on the list get no CORS headers at all, so the browser's same-origin
+// policy keeps blocking them by default.
 func (s *Server) withCORS(next http.Handler) http.Handler {
 	allowed := make(map[string]bool, len(s.AllowedOrigins))
 	for _, o := range s.AllowedOrigins {
@@ -66,11 +83,12 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		origin := r.Header.Get("Origin")
 		if origin != "" && allowed[origin] {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
 			w.Header().Set("Vary", "Origin")
 		}
 
 		if r.Method == http.MethodOptions {
-			w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -93,7 +111,8 @@ type healthStatus struct {
 }
 
 // handleHealthz pings Postgres and Redis so an orchestrator can distinguish
-// "process is up" from "process can actually serve traffic".
+// "process is up" from "process can actually serve traffic". Deliberately
+// unauthenticated — load balancers hitting this shouldn't need a session.
 func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 	defer cancel()
@@ -115,122 +134,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, code, out)
 }
 
-type brokerAccountResult struct {
-	broker  models.BrokerName
-	account models.Account
-	err     error
-}
-
-// brokerStatus reports one broker's fetch outcome so clients can render
-// every configured broker (connected or not) without parsing error strings.
-type brokerStatus struct {
-	Broker  models.BrokerName `json:"broker"`
-	Account *models.Account   `json:"account,omitempty"`
-	// EquityUSD is Account.Equity converted to USD via the same rate
-	// engine.AggregateBalances uses, so clients can build a cross-broker
-	// allocation breakdown without re-implementing (or guessing at) the
-	// CAD/USD conversion themselves.
-	EquityUSD *float64 `json:"equity_usd,omitempty"`
-	Error     string   `json:"error,omitempty"`
-}
-
-type balanceResponse struct {
-	Unified engine.UnifiedBalance `json:"unified"`
-	Brokers []brokerStatus        `json:"brokers"`
-}
-
-// handleBalance fans out to every configured broker concurrently and rolls
-// the results up into a single USD-denominated view via
-// engine.AggregateBalances.
-func (s *Server) handleBalance(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
-	results := make([]brokerAccountResult, len(s.Brokers))
-	var wg sync.WaitGroup
-	for i, b := range s.Brokers {
-		wg.Add(1)
-		go func(i int, b brokerage.Broker) {
-			defer wg.Done()
-			acct, err := b.GetAccount(ctx)
-			results[i] = brokerAccountResult{broker: b.Name(), account: acct, err: err}
-		}(i, b)
-	}
-	wg.Wait()
-
-	statuses := make([]brokerStatus, len(results))
-	var accounts []models.Account
-	for i, res := range results {
-		if res.err != nil {
-			s.Logger.Warn("balance: broker account fetch failed", "broker", res.broker, "error", res.err)
-			statuses[i] = brokerStatus{Broker: res.broker, Error: res.err.Error()}
-			continue
-		}
-		equityUSD := res.account.Equity * engine.USDRate(res.account.Currency, s.USDCADRate)
-		statuses[i] = brokerStatus{Broker: res.broker, Account: &res.account, EquityUSD: &equityUSD}
-		accounts = append(accounts, res.account)
-	}
-
-	unified := engine.AggregateBalances(accounts, s.USDCADRate)
-
-	writeJSON(w, http.StatusOK, balanceResponse{
-		Unified: unified,
-		Brokers: statuses,
-	})
-}
-
-type quoteResponse struct {
-	Broker    models.BrokerName `json:"broker"`
-	Symbol    string            `json:"symbol"`
-	Bid       float64           `json:"bid"`
-	Ask       float64           `json:"ask"`
-	Timestamp int64             `json:"timestamp"`
-}
-
-// handleQuote looks up a single on-demand quote from one broker. This is a
-// synchronous REST call to the broker, not a stream — see the web client's
-// Market page for why that distinction matters (no live tick feed exists).
-func (s *Server) handleQuote(w http.ResponseWriter, r *http.Request) {
-	brokerName := r.URL.Query().Get("broker")
-	symbol := r.URL.Query().Get("symbol")
-	if brokerName == "" || symbol == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "both broker and symbol query params are required"})
-		return
-	}
-
-	var target brokerage.Broker
-	for _, b := range s.Brokers {
-		if string(b.Name()) == brokerName {
-			target = b
-			break
-		}
-	}
-	if target == nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown broker: " + brokerName})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
-	quote, err := target.GetQuote(ctx, symbol)
-	if err != nil {
-		s.Logger.Warn("quote: fetch failed", "broker", brokerName, "symbol", symbol, "error", err)
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, quoteResponse{
-		Broker:    target.Name(),
-		Symbol:    quote.Symbol,
-		Bid:       quote.Bid,
-		Ask:       quote.Ask,
-		Timestamp: quote.Timestamp,
-	})
-}
-
 func writeJSON(w http.ResponseWriter, code int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+func writeError(w http.ResponseWriter, code int, message string) {
+	writeJSON(w, code, map[string]string{"error": message})
 }

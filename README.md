@@ -13,26 +13,29 @@ The platform functions as an intelligent middleware layer. It unifies isolated b
 This section reflects what actually runs today, not the target architecture. See the sections below for the full design.
 
 **Built and verified working:**
+- **Multi-tenant authentication** (`internal/auth/`, `internal/db/users.go`) — registration, bcrypt password hashing, Redis-backed sessions (HttpOnly cookie), and a `requireAuth` middleware gating every non-public endpoint
+- **Per-user encrypted broker credentials** (`internal/db/broker_credentials.go`, `pkg/crypto/`) — each user connects their *own* Alpaca/OANDA/Questrade credentials, AES-256-GCM encrypted at rest under `CREDENTIAL_ENCRYPTION_KEY`. There's no single shared set of credentials serving every user anymore
+- **Per-user broker factory** (`internal/userbrokers/`) — builds that request's authenticated user's own `brokerage.Broker` clients on demand from their stored credentials; two users never see each other's accounts (verified: registering a second user shows zero connected brokers and an empty balance, independent of the first user's connections)
 - Go middleware gateway (`cmd/main_gateway`) — loads config/`.env`, connects Postgres + Redis, applies the schema, serves HTTP
 - Brokerage drivers for Alpaca, OANDA, and Questrade (`internal/brokerage/`) — account + quote reads for all three; order placement implemented for Alpaca and OANDA, not yet for Questrade (needs a live practice account to verify its two-step order-impact/commit flow)
 - Cross-broker unified balance engine and FINRA Pattern Day Trader check (`internal/engine/`)
-- Postgres-backed persistence for Questrade's rotating OAuth refresh token (`internal/db/oauth_tokens.go`) — without this, a process restart burns Questrade access, since its refresh tokens are single-use
-- HTTP API: `GET /healthz`, `GET /api/v1/balance`, `GET /api/v1/quote`, `GET /logo.png` (see [Gateway HTTP API](#gateway-http-api))
-- Web client (`web/`) — React + TypeScript + Tailwind, eight-page shell (`/profile`, `/dashboard`, `/funds`, `/market/:symbol`, `/trade`, `/forecasts`, `/reports`, `/settings`) matching the platform's target IA. **Dashboard** (unified NAV, cross-border split, per-broker USD allocation donut), **Settings** (broker connectivity audit), **Market data** (on-demand real quote lookup), and **Funds** (links to each broker's real funding portal) are fully real, backed by the gateway. **Trade**, **Forecasts**, **Reports**, and **Profile** render the correct layout but each panel explicitly states what backend piece it's waiting on — see below — rather than showing placeholder/fabricated numbers or a cosmetic login form.
+- Postgres-backed persistence for Questrade's rotating OAuth refresh token (`internal/db/oauth_tokens.go`, now per-user) — without this, a process restart burns Questrade access, since its refresh tokens are single-use
+- HTTP API: auth (`/api/v1/auth/*`), broker credentials (`/api/v1/broker-credentials*`), `GET /api/v1/balance`, `GET /api/v1/quote`, `GET /healthz`, `GET /logo.png` (see [Gateway HTTP API](#gateway-http-api))
+- Web client (`web/`) — React + TypeScript + Tailwind, real login/register screens gating an eight-page shell (`/profile`, `/dashboard`, `/funds`, `/market/:symbol`, `/trade`, `/forecasts`, `/reports`, `/settings`). **Dashboard** (unified NAV, cross-border split, per-broker USD allocation donut), **Settings** (broker connectivity audit), **Market data** (on-demand real quote lookup), **Funds** (links to each broker's real funding portal), and **Profile** (real user info + broker connect/disconnect UI) are fully real, backed by the gateway. **Trade**, **Forecasts**, and **Reports** render the correct layout but each panel explicitly states what backend piece it's waiting on — see below — rather than showing placeholder/fabricated numbers.
 - Local dev infra: `docker-compose.yml` (Postgres + Redis Stack)
 
 **Not yet built** (described below as the target architecture, and stated inline in the web client's `NotConnected` panels):
-- Authentication — the gateway has no user accounts, sessions, or per-user broker credentials; it's single-tenant, using one shared set of credentials from `.env` for everyone. Blocks: real Profile/register/login, and any notion of "this data belongs to this user."
 - Python DL engine (`services/dl_engine/`) — LSTM/Transformer forecasters, RL execution optimizer, ONNX inference, self-correcting feedback loop. Blocks: Forecasts page's forecasting matrix, confidence tracking, self-correction log.
 - Real-time streaming ingestion pipeline (`cmd/data_pipeline/`) — Kafka, WebSocket market data fan-out. Blocks: Market page's candlestick stream, Level 2 depth, indicator overlays. (Market data quote *lookups* are real and live today — see above; there's just no streaming tick feed yet.)
 - Order-execution HTTP endpoint — `PlaceOrder` exists per-broker (`internal/brokerage/`) but the gateway doesn't expose it over HTTP, and `internal/engine/pdt.go`'s PDT check isn't wired to the API either. Blocks: Trade page's order ticket and PDT risk shield, and Reports (nothing persists to the `orders` table yet).
-- Production safeguards described in [Production Considerations](#production-considerations-and-security-guardrails): CAD/USD slippage cushion, DL engine circuit breaker, at-rest key encryption
+- Production safeguards described in [Production Considerations](#production-considerations-and-security-guardrails): CAD/USD slippage cushion, DL engine circuit breaker
 
 **Deliberately not planned, and why:** in-app deposit/withdrawal execution, and any form of direct market/FIX connectivity that would make VOT Tradings itself an exchange or clearing venue. See the note at the end of this section.
 
 **Operational notes if you're running this locally:**
-- OANDA's `PlaceOrder` is fully implemented — if `OANDA_BASE_URL` in your `.env` points at `api-fxtrade.oanda.com` (live) instead of `api-fxpractice.oanda.com` (practice), any code path that calls it executes real trades with real money.
-- Questrade refresh tokens rotate on every use and invalidate the previous one. This repo persists the rotated token to Postgres automatically; if you ever hand-paste a fresh token into `.env` after the `broker_oauth_tokens` table already has a row, the *stored* value wins on next boot (see the comment on `ensureAuth` in `internal/brokerage/questrade/client.go`) — clear that row first if you need the `.env` value to take precedence.
+- OANDA's `PlaceOrder` is fully implemented — if the `base_url` you save for your OANDA credentials is `api-fxtrade.oanda.com` (live) instead of `api-fxpractice.oanda.com` (practice), any code path that calls it executes real trades with real money.
+- Questrade refresh tokens rotate on every use and invalidate the previous one. This repo persists the rotated token to Postgres per-user automatically; if you connect Questrade via `import-env` and the `.env` token has already been consumed in an earlier session, the import will succeed but the next API call will fail with a token error — generate a fresh refresh token from Questrade and reconnect via Profile.
+- `CREDENTIAL_ENCRYPTION_KEY` (see `.env.example`) is required — the gateway refuses to start without it rather than fall back to storing broker credentials in plaintext. Generate your own with `openssl rand -base64 32`; losing or rotating this key makes every previously-stored credential permanently undecryptable, so back it up like any other production secret.
 
 **Why VOT Tradings routes through Alpaca/OANDA/Questrade instead of self-clearing:** it would be architecturally possible to write a direct FIX gateway, an in-memory margin ledger, and Kafka-replicated settlement — but doing that makes VOT Tradings itself a broker-dealer/exchange/clearing venue, which isn't a coding problem. It requires FINRA/SEC broker-dealer registration (or NFA/CFTC registration for FX dealing), clearing-member capital requirements that typically run into the millions of dollars, and a compliance/legal program before a single order could legally route. Operating unregistered would be a serious regulatory violation, not a launch-and-fix-later gap. Routing through already-regulated brokers is what makes the rest of this project legal to build as a solo/small-team effort. A shadow in-memory balance ledger on top of brokers VOT Tradings doesn't custody funds at is also a correctness hazard on its own terms: the real money and the real margin state live at Alpaca/OANDA/Questrade, so any local ledger that thinks it's authoritative will eventually drift from reality and approve or block trades based on stale state. Any future performance layer should be a *read-through cache* of broker-reported balances, refreshed frequently, advisory only — the broker's own real-time check at order submission stays the actual authority.
 
@@ -147,23 +150,30 @@ vot-tradings/
 │   └── main_gateway/         # Go middleware API gateway entry point (implemented)
 │                              # cmd/data_pipeline/ (planned, not yet scaffolded)
 ├── internal/                 # Private Go application core
-│   ├── brokerage/            # Broker drivers: Alpaca, OANDA, Questrade
-│   ├── cache/                 # Redis connection + key/channel helpers
-│   ├── config/                 # Env/.env-based configuration loader
-│   ├── db/                     # Postgres connection, schema, OAuth token store
-│   ├── engine/                 # Unified balance aggregation, PDT compliance
-│   ├── httpapi/                # HTTP handlers (health, balance, logo)
-│   └── models/                  # Shared domain types
+│   ├── auth/                  # Password hashing (bcrypt), Redis-backed sessions
+│   ├── brokerage/             # Broker drivers: Alpaca, OANDA, Questrade
+│   ├── cache/                  # Redis connection + key/channel helpers
+│   ├── config/                  # Env/.env-based configuration loader
+│   ├── db/                      # Postgres connection, schema, users, per-user
+│   │                              # broker credentials, OAuth token store
+│   ├── engine/                  # Unified balance aggregation, PDT compliance
+│   ├── httpapi/                 # HTTP handlers (auth, credentials, balance, quote, health, logo)
+│   ├── models/                   # Shared domain types
+│   └── userbrokers/               # Builds each user's own broker clients from
+│                                    # their stored, decrypted credentials
 ├── pkg/
-│   └── logger/                  # Structured slog logger
+│   ├── crypto/                   # AES-256-GCM encryption for credentials at rest
+│   └── logger/                    # Structured slog logger
 ├── web/                        # React + TypeScript + Tailwind client (implemented)
 │   └── src/
-│       ├── pages/               # Dashboard, Market, Intelligence, Trade, Settings
-│       ├── context/             # PortfolioContext — shared poll of health + balance
-│       ├── hooks/                # usePolling (live); useAlpacaStream/useOandaStream/
-│       │                          # useInference (stubs — see Current Implementation Status)
-│       ├── components/           # layout/, ui/, charts/, trading/
-│       └── lib/                  # Typed gateway API client
+│       ├── pages/               # Login, Register, Profile, Dashboard, Funds, Market,
+│       │                          # Trade, Forecasts, Reports, Settings
+│       ├── context/              # AuthContext (real session state), PortfolioContext
+│       │                          # (health + balance poll, mounted only once authenticated)
+│       ├── hooks/                 # usePolling (live); useAlpacaStream/useOandaStream/
+│       │                           # useInference (stubs — see Current Implementation Status)
+│       ├── components/            # layout/ (incl. ProtectedRoute), ui/, charts/, trading/
+│       └── lib/                   # Typed gateway API client
 ├── assets/
 │   └── logo.png                 # Canonical app logo — served by the gateway at /logo.png
 ├── services/
@@ -181,7 +191,7 @@ vot-tradings/
 * **Go:** `v1.25+` (pinned by `go.mod`; a transitive dependency requires this floor)
 * **Node.js:** `v20+` (for `web/`)
 * **Docker and Docker Compose**
-* Sandbox credentials for whichever of Alpaca / OANDA / Questrade you want to exercise — the gateway runs fine with any subset configured; unconfigured brokers just show as unavailable in `/api/v1/balance`.
+* Sandbox credentials for whichever of Alpaca / OANDA / Questrade you want to connect — you'll enter these as a registered user via the web client's Profile page (or `.env` + the `import-env` convenience endpoint for local testing), not as global gateway config. Unconnected brokers just show as unavailable in `/api/v1/balance`.
 
 ### Step 1: Clone and configure environment variables
 
@@ -232,14 +242,22 @@ cd services/dl_engine
 
 ## Gateway HTTP API
 
-| Method | Path                | Description |
-|--------|----------------------|--------------|
-| GET    | `/healthz`            | Pings Postgres and Redis; `200` if both are reachable, `503` otherwise. |
-| GET    | `/api/v1/balance`      | Fans out to every configured broker concurrently, returns each broker's account/error plus its USD-converted equity (`equity_usd`, via `internal/engine.USDRate`), and a USD-unified rollup (`internal/engine.AggregateBalances`). |
-| GET    | `/api/v1/quote?broker=&symbol=` | One-shot REST quote lookup against a single broker's `GetQuote`. A synchronous snapshot, not a stream — see `web/`'s Market data page. |
-| GET    | `/logo.png`            | Serves `assets/logo.png` — the single canonical app logo; clients should reference this endpoint rather than bundling their own copy. |
+| Method | Path                | Auth | Description |
+|--------|----------------------|------|--------------|
+| GET    | `/healthz`            | none | Pings Postgres and Redis; `200` if both are reachable, `503` otherwise. |
+| GET    | `/logo.png`            | none | Serves `assets/logo.png` — the single canonical app logo; clients should reference this endpoint rather than bundling their own copy. |
+| POST   | `/api/v1/auth/register` | none | `{email, password}` → creates the user, hashes the password with bcrypt, starts a session. |
+| POST   | `/api/v1/auth/login`   | none | `{email, password}` → starts a session on success. |
+| POST   | `/api/v1/auth/logout`  | session | Invalidates the session and clears the cookie. |
+| GET    | `/api/v1/auth/me`      | session | Returns the authenticated user. |
+| GET    | `/api/v1/broker-credentials` | session | Lists all known brokers with `connected: true/false` for the authenticated user — never the credentials themselves. |
+| POST   | `/api/v1/broker-credentials` | session | `{broker, credentials: {...}}` → encrypts and stores the authenticated user's credentials for that broker. |
+| DELETE | `/api/v1/broker-credentials?broker=` | session | Removes the authenticated user's stored credentials for that broker. |
+| POST   | `/api/v1/broker-credentials/import-env` | session | Local-dev convenience: copies any legacy `.env` broker credentials into the authenticated user's own encrypted rows. Not how a real second user connects a broker. |
+| GET    | `/api/v1/balance`      | session | Builds the authenticated user's own brokers from their stored credentials, fans out concurrently, returns each broker's account/error plus its USD-converted equity (`equity_usd`), and a USD-unified rollup. |
+| GET    | `/api/v1/quote?broker=&symbol=` | session | One-shot REST quote lookup against one of the authenticated user's connected brokers. A synchronous snapshot, not a stream — see `web/`'s Market data page. |
 
-CORS is allow-listed by exact origin via `CORS_ALLOWED_ORIGINS` (comma-separated) — origins not on the list get no CORS headers and are blocked by the browser as usual.
+CORS is allow-listed by exact origin via `CORS_ALLOWED_ORIGINS` (comma-separated) — origins not on the list get no CORS headers and are blocked by the browser as usual. `Access-Control-Allow-Credentials` is set for allowed origins so the session cookie survives the cross-origin fetch between the web client's dev server and the gateway.
 
 ---
 

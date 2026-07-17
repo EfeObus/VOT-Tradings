@@ -1,6 +1,7 @@
 // Command main_gateway is the VOT Tradings middleware core: it loads
-// configuration, connects to Postgres and Redis, wires up the brokerage
-// drivers, and serves the JSON gateway described in the project README.
+// configuration, connects to Postgres and Redis, wires up auth and each
+// user's own brokerage credentials, and serves the JSON gateway described
+// in the project README.
 package main
 
 import (
@@ -12,14 +13,13 @@ import (
 	"syscall"
 	"time"
 
-	"vot-tradings/internal/brokerage"
-	"vot-tradings/internal/brokerage/alpaca"
-	"vot-tradings/internal/brokerage/oanda"
-	"vot-tradings/internal/brokerage/questrade"
+	"vot-tradings/internal/auth"
 	"vot-tradings/internal/cache"
 	"vot-tradings/internal/config"
 	"vot-tradings/internal/db"
 	"vot-tradings/internal/httpapi"
+	"vot-tradings/internal/userbrokers"
+	"vot-tradings/pkg/crypto"
 	"vot-tradings/pkg/logger"
 )
 
@@ -55,22 +55,27 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	tokenStore := db.NewOAuthTokenStore(pgPool)
-	questradeClient := questrade.New(cfg.Questrade, tokenStore)
-	questradeClient.Logger = log
-
-	brokers := []brokerage.Broker{
-		alpaca.New(cfg.Alpaca),
-		oanda.New(cfg.OANDA),
-		questradeClient,
+	credentialBox, err := crypto.NewBox(cfg.CredentialEncryptionKey)
+	if err != nil {
+		log.Error("init credential encryption", "error", err)
+		os.Exit(1)
 	}
 
+	users := db.NewUserStore(pgPool)
+	sessions := auth.NewSessionStore(redisClient)
+	credentials := db.NewCredentialStore(pgPool, credentialBox)
+	tokens := db.NewOAuthTokenStore(pgPool)
+	brokerFactory := userbrokers.NewFactory(credentials, tokens)
+
 	srv := &httpapi.Server{
-		Brokers:        brokers,
 		DB:             pgPool,
 		Cache:          redisClient,
 		Logger:         log,
-		USDCADRate:     cfg.USDCADRate,
+		Config:         cfg,
+		Users:          users,
+		Sessions:       sessions,
+		Credentials:    credentials,
+		Brokers:        brokerFactory,
 		AssetsDir:      assetsDir,
 		AllowedOrigins: cfg.CORSAllowedOrigins,
 	}

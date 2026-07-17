@@ -25,12 +25,19 @@ type Config struct {
 	// served from, so the gateway can allow its browser fetches through.
 	CORSAllowedOrigins []string
 
-	Postgres PostgresConfig
-	Redis    RedisConfig
-	Alpaca   AlpacaConfig
-	OANDA    OANDAConfig
+	// CredentialEncryptionKey is a base64-encoded 32-byte AES-256 key used
+	// to encrypt each user's stored brokerage credentials at rest (see
+	// pkg/crypto). There is no safe default — Load panics if it's unset,
+	// since running without it would mean either refusing to start or
+	// silently storing secrets in plaintext, and the latter is worse.
+	CredentialEncryptionKey string
+
+	Postgres  PostgresConfig
+	Redis     RedisConfig
+	Alpaca    AlpacaConfig
+	OANDA     OANDAConfig
 	Questrade QuestradeConfig
-	DLEngine DLEngineConfig
+	DLEngine  DLEngineConfig
 }
 
 type PostgresConfig struct {
@@ -87,12 +94,21 @@ type DLEngineConfig struct {
 func Load() Config {
 	_ = godotenv.Load()
 
+	credentialKey := getEnv("CREDENTIAL_ENCRYPTION_KEY", "")
+	if credentialKey == "" {
+		fmt.Fprintln(os.Stderr, "config: CREDENTIAL_ENCRYPTION_KEY is not set.")
+		fmt.Fprintln(os.Stderr, "Generate one with: openssl rand -base64 32")
+		fmt.Fprintln(os.Stderr, "and set it in .env — refusing to start rather than store broker credentials in plaintext.")
+		os.Exit(1)
+	}
+
 	return Config{
-		Port:       getEnv("PORT", "8080"),
-		Env:        getEnv("ENV", "development"),
-		LogLevel:   getEnv("LOG_LEVEL", "info"),
-		USDCADRate:         getEnvFloat("USD_CAD_RATE", 0.73),
-		CORSAllowedOrigins: getEnvList("CORS_ALLOWED_ORIGINS", []string{"http://localhost:5173"}),
+		Port:                    getEnv("PORT", "8080"),
+		Env:                     getEnv("ENV", "development"),
+		LogLevel:                getEnv("LOG_LEVEL", "info"),
+		USDCADRate:              getEnvFloat("USD_CAD_RATE", 0.73),
+		CORSAllowedOrigins:      getEnvList("CORS_ALLOWED_ORIGINS", []string{"http://localhost:5173"}),
+		CredentialEncryptionKey: credentialKey,
 		Postgres: PostgresConfig{
 			Host:     getEnv("POSTGRES_HOST", "localhost"),
 			Port:     getEnv("POSTGRES_PORT", "5432"),

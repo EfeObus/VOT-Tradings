@@ -1,6 +1,6 @@
 # VOT Tradings — Web Client
 
-React + TypeScript + Tailwind v4 client for the VOT Tradings gateway (`cmd/main_gateway`). Five-page shell matching the platform's target IA — see [Current scope](#current-scope) for what's real vs. pending backend.
+React + TypeScript + Tailwind v4 client for the VOT Tradings gateway (`cmd/main_gateway`). Real login/register gate an eight-page shell matching the platform's target IA — see [Current scope](#current-scope) for what's real vs. pending backend.
 
 ## Setup
 
@@ -11,7 +11,7 @@ npm install
 npm run dev
 ```
 
-Requires the Go gateway running and reachable (default `http://localhost:8080`), with `CORS_ALLOWED_ORIGINS` in the gateway's `.env` including this app's origin (default `http://localhost:5173`).
+Requires the Go gateway running and reachable (default `http://localhost:8080`), with `CORS_ALLOWED_ORIGINS` in the gateway's `.env` including this app's origin (default `http://localhost:5173`) — the gateway also needs `Access-Control-Allow-Credentials` for the session cookie to survive the cross-origin fetch, which it sets automatically for allowed origins.
 
 ## Scripts
 
@@ -26,26 +26,29 @@ Defined in `src/index.css` via Tailwind v4's `@theme`: `--color-canvas` (#0B0E14
 
 ## Structure
 
-- `src/pages/` — `Profile`, `Dashboard`, `Funds`, `Market`, `Trade`, `Forecasts`, `Reports`, `Settings`, routed in `App.tsx`
-- `src/context/PortfolioContext.tsx` — single shared poll of `/healthz` + `/api/v1/balance`, consumed by any page via `usePortfolio()`
+- `src/pages/` — `Login`, `Register`, `Profile`, `Dashboard`, `Funds`, `Market`, `Trade`, `Forecasts`, `Reports`, `Settings`, routed in `App.tsx`
+- `src/context/AuthContext.tsx` — real session state (`login`/`register`/`logout`, current `user`); checks `GET /api/v1/auth/me` on load
+- `src/context/PortfolioContext.tsx` — shared poll of `/healthz` + `/api/v1/balance`, mounted only inside the authenticated layout (polling before login would just 401 on repeat)
+- `src/components/layout/ProtectedRoute.tsx` — redirects to `/login` when `useAuth()` has no user
 - `src/hooks/usePolling.ts` — the underlying fixed-interval polling hook
 - `src/hooks/useAlpacaStream.ts`, `useOandaStream.ts`, `useInference.ts` — **stubs**. Each always returns `{ connected: false, reason: 'not_implemented' }`; they exist as the landing spot for real streaming/inference work later, not as working data sources today
-- `src/components/layout/` — `NavBar`, `AppLayout`
-- `src/components/ui/` — `Card`, `StatTile`, `StatusBadge`, `NotConnected` (the "this feature has no backend yet" panel used throughout Market/Intelligence/Trade)
+- `src/components/layout/` — `NavBar` (shows the logged-in user's email + logout), `AppLayout`, `ProtectedRoute`
+- `src/components/ui/` — `Card`, `StatTile`, `StatusBadge`, `NotConnected` (the "this feature has no backend yet" panel used throughout Market/Forecasts/Trade)
 - `src/components/charts/AllocationDonut.tsx` — per-broker USD allocation, computed from the gateway's `equity_usd` field (never a client-side guess at FX conversion)
 - `src/components/trading/BrokerAccountCard.tsx` — per-broker connected/error card
-- `src/lib/api.ts`, `src/lib/types.ts` — typed gateway client; keep in sync with `internal/httpapi/httpapi.go`
+- `src/lib/api.ts`, `src/lib/types.ts` — typed gateway client (every call sends `credentials: 'include'` for the session cookie); keep in sync with `internal/httpapi/`
 
 ## Current scope
 
 | Page | Status |
 |---|---|
-| `/dashboard` | Real — NAV, cross-border split, allocation chart, all from `/api/v1/balance` |
+| `/login`, `/register` | Real — backed by `internal/auth` (bcrypt + Redis sessions), not a cosmetic form |
+| `/profile` | Real — shows the signed-in user, and lets them connect/disconnect their own Alpaca/OANDA/Questrade credentials (`POST/DELETE /api/v1/broker-credentials`), encrypted server-side |
+| `/dashboard` | Real — NAV, cross-border split, allocation chart, all from the authenticated user's own `/api/v1/balance` |
 | `/settings` | Real — broker connectivity audit from the same endpoint |
-| `/market/:symbol` | Real on-demand quote lookup (`GET /api/v1/quote`) — a REST snapshot, not a stream. Candlesticks/L2/indicators below it show `NotConnected` |
+| `/market/:symbol` | Real on-demand quote lookup (`GET /api/v1/quote`) against one of the user's connected brokers — a REST snapshot, not a stream. Candlesticks/L2/indicators below it show `NotConnected` |
 | `/trade` | Cash-by-currency is real; the order ticket and PDT shield show `NotConnected` — needs an order-execution HTTP endpoint |
 | `/funds` | Real external links to each broker's own funding portal — deposits/withdrawals aren't reimplemented in-app, deliberately (see root README) |
-| `/profile` | Honest disclosure only: the gateway has no authentication, and states that plainly rather than showing a cosmetic login form |
 | `/forecasts` | Layout only — needs the Python DL engine (`services/dl_engine`, currently empty) |
 | `/reports` | Layout only — needs orders to actually be persisted, which needs the order-execution API first |
 

@@ -46,3 +46,14 @@ export interface Quote {
   ask: number
   timestamp: number
 }
+
+export interface User {
+  id: string
+  email: string
+  created_at: string
+}
+
+export interface BrokerCredentialStatus {
+  broker: BrokerName
+  connected: boolean
+}

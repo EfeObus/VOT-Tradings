@@ -74,12 +74,37 @@ CREATE TABLE IF NOT EXISTS day_trades (
 
 CREATE INDEX IF NOT EXISTS idx_day_trades_account_date ON day_trades (account_id, trade_date);
 
+-- Registered VOT Tradings users. Sessions live in Redis (see
+-- internal/auth), keyed by an opaque token mapping to id.
+CREATE TABLE IF NOT EXISTS users (
+    id            TEXT PRIMARY KEY,
+    email         TEXT NOT NULL UNIQUE,
+    password_hash TEXT NOT NULL,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Per-user brokerage credentials, AES-GCM encrypted at rest (see
+-- pkg/crypto). Each user brings their own Alpaca/OANDA/Questrade
+-- credentials rather than the whole app sharing one set from .env — the
+-- gateway builds that user's broker clients from these rows per request.
+CREATE TABLE IF NOT EXISTS user_broker_credentials (
+    user_id              TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    broker               TEXT NOT NULL,
+    encrypted_credentials BYTEA NOT NULL,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, broker)
+);
+
 -- OAuth refresh-token persistence for brokers whose tokens rotate on every
 -- exchange (currently Questrade: the previous refresh token is invalidated
 -- the moment a new one is issued). Without this, a process restart burns
--- access and requires re-authorizing through the broker's website.
+-- access and requires re-authorizing through the broker's website. Scoped
+-- per-user since each user authorizes their own Questrade account.
 CREATE TABLE IF NOT EXISTS broker_oauth_tokens (
-    broker        TEXT PRIMARY KEY,
+    user_id       TEXT NOT NULL REFERENCES users (id) ON DELETE CASCADE,
+    broker        TEXT NOT NULL,
     refresh_token TEXT NOT NULL,
-    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, broker)
 );
