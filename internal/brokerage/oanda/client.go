@@ -5,6 +5,7 @@
 package oanda
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"vot-tradings/internal/brokerage"
@@ -225,4 +227,109 @@ func (c *Client) PlaceOrder(ctx context.Context, req brokerage.PlaceOrderRequest
 		CreatedAt:     time.Now().UTC(),
 		UpdatedAt:     time.Now().UTC(),
 	}, nil
+}
+
+// PriceUpdate is a single normalized tick from OANDA's streaming pricing
+// endpoint.
+type PriceUpdate struct {
+	Instrument string
+	Bid        float64
+	Ask        float64
+	Time       time.Time
+}
+
+// streamBaseURL derives OANDA's streaming hostname from the configured REST
+// base URL. OANDA serves streaming pricing on a *different host* than its
+// REST API (stream-fxpractice/stream-fxtrade vs api-fxpractice/api-fxtrade)
+// — reusing cfg.BaseURL directly would 404.
+func (c *Client) streamBaseURL() (string, error) {
+	switch c.cfg.BaseURL {
+	case "https://api-fxpractice.oanda.com":
+		return "https://stream-fxpractice.oanda.com", nil
+	case "https://api-fxtrade.oanda.com":
+		return "https://stream-fxtrade.oanda.com", nil
+	default:
+		return "", fmt.Errorf("oanda: cannot derive streaming host from base_url %q", c.cfg.BaseURL)
+	}
+}
+
+// StreamPricing opens OANDA's chunked-HTTP pricing stream for the given
+// instruments and pushes normalized ticks to the returned channel until ctx
+// is canceled, the caller stops reading, or the connection drops. The
+// channel is closed when streaming ends for any reason.
+//
+// Uses a dedicated http.Client with no request timeout — c.httpClient's 10s
+// timeout covers the whole request including the body read, which would
+// kill a long-lived stream after 10 seconds regardless of activity.
+func (c *Client) StreamPricing(ctx context.Context, instruments []string) (<-chan PriceUpdate, error) {
+	streamHost, err := c.streamBaseURL()
+	if err != nil {
+		return nil, err
+	}
+
+	url := fmt.Sprintf("%s/v3/accounts/%s/pricing/stream?instruments=%s",
+		streamHost, c.cfg.AccountID, strings.Join(instruments, ","))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.authHeaders(req)
+
+	streamClient := &http.Client{}
+	resp, err := streamClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("oanda: stream pricing: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("oanda: stream pricing: status %d: %s", resp.StatusCode, body)
+	}
+
+	out := make(chan PriceUpdate)
+	go func() {
+		defer close(out)
+		defer resp.Body.Close()
+
+		scanner := bufio.NewScanner(resp.Body)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+
+			var raw struct {
+				Type       string `json:"type"`
+				Instrument string `json:"instrument"`
+				Time       string `json:"time"`
+				Bids       []struct {
+					Price string `json:"price"`
+				} `json:"bids"`
+				Asks []struct {
+					Price string `json:"price"`
+				} `json:"asks"`
+			}
+			// Heartbeats (type "HEARTBEAT") and any unparseable line are
+			// skipped rather than treated as errors — OANDA sends
+			// heartbeats every ~5s to keep the connection alive.
+			if err := json.Unmarshal(line, &raw); err != nil || raw.Type != "PRICE" {
+				continue
+			}
+			if len(raw.Bids) == 0 || len(raw.Asks) == 0 {
+				continue
+			}
+
+			bid, _ := strconv.ParseFloat(raw.Bids[0].Price, 64)
+			ask, _ := strconv.ParseFloat(raw.Asks[0].Price, 64)
+			t, _ := time.Parse(time.RFC3339, raw.Time)
+
+			select {
+			case out <- PriceUpdate{Instrument: raw.Instrument, Bid: bid, Ask: ask, Time: t}:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+
+	return out, nil
 }

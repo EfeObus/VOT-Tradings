@@ -31,7 +31,8 @@ Defined in `src/index.css` via Tailwind v4's `@theme`: `--color-canvas` (#0B0E14
 - `src/context/PortfolioContext.tsx` — shared poll of `/healthz` + `/api/v1/balance`, mounted only inside the authenticated layout (polling before login would just 401 on repeat)
 - `src/components/layout/ProtectedRoute.tsx` — redirects to `/login` when `useAuth()` has no user
 - `src/hooks/usePolling.ts` — the underlying fixed-interval polling hook
-- `src/hooks/useAlpacaStream.ts`, `useOandaStream.ts`, `useInference.ts` — **stubs**. Each always returns `{ connected: false, reason: 'not_implemented' }`; they exist as the landing spot for real streaming/inference work later, not as working data sources today
+- `src/hooks/useOandaStream.ts` — **real**. Opens a WebSocket to `GET /ws/quotes` and pushes live bid/ask ticks from OANDA's actual streaming API; the session cookie rides along on the handshake automatically (unlike `fetch`, native WebSocket doesn't need a credentials flag)
+- `src/hooks/useAlpacaStream.ts`, `useInference.ts` — still **stubs**, always returning `{ connected: false, reason: 'not_implemented' }`; landing spots for streaming (Alpaca has no `StreamPricing` yet) and DL inference work
 - `src/components/layout/` — `NavBar` (shows the logged-in user's email + logout), `AppLayout`, `ProtectedRoute`
 - `src/components/ui/` — `Card`, `StatTile`, `StatusBadge`, `NotConnected` (the "this feature has no backend yet" panel used throughout Market/Forecasts/Trade)
 - `src/components/charts/AllocationDonut.tsx` — per-broker USD allocation, computed from the gateway's `equity_usd` field (never a client-side guess at FX conversion)
@@ -46,7 +47,7 @@ Defined in `src/index.css` via Tailwind v4's `@theme`: `--color-canvas` (#0B0E14
 | `/profile` | Real — shows the signed-in user, and lets them connect/disconnect their own Alpaca/OANDA/Questrade credentials (`POST/DELETE /api/v1/broker-credentials`), encrypted server-side |
 | `/dashboard` | Real — NAV, cross-border split, allocation chart from the authenticated user's own `/api/v1/balance`. Shows an explicit "no brokers connected yet" prompt instead of a blank screen when the user has none — no internal infra status (Postgres/Redis/etc.) is shown here, that's not user-facing information |
 | `/settings` | Real — broker connectivity audit from the same endpoint |
-| `/market/:symbol` | Real on-demand quote lookup (`GET /api/v1/quote`) against one of the user's connected brokers — a REST snapshot, not a stream. Candlesticks/L2/indicators below it show `NotConnected` |
+| `/market/:symbol` | Real on-demand REST quote lookup, **plus a real live-updating price stream for OANDA** (`GET /ws/quotes`, verified against the actual live account). Candlestick charting, L2, and indicators show `NotConnected` — the tick feed exists, aggregation/charting/indicator math over it doesn't yet |
 | `/trade` | Real — cash-by-currency, and a real order ticket (`POST /api/v1/orders`) gated behind an explicit "this may execute a real trade" confirmation checkbox. TWAP/VWAP/RL-routing options show `NotConnected` |
 | `/funds` | Real external links to each broker's own funding portal — deposits/withdrawals aren't reimplemented in-app, deliberately (see root README) |
 | `/forecasts` | Layout only — needs the Python DL engine (`services/dl_engine`, currently empty) |

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { Card } from '../components/ui/Card'
 import { NotConnected } from '../components/ui/NotConnected'
+import { useOandaStream } from '../hooks/useOandaStream'
 import { ApiError, getQuote } from '../lib/api'
 import type { BrokerName, Quote } from '../lib/types'
 import { BROKER_LABELS } from '../utils/format'
@@ -17,6 +18,12 @@ export function Market() {
   const [quote, setQuote] = useState<Quote | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+
+  // Live streaming is OANDA-only for now (internal/brokerage/oanda is the
+  // only client with StreamPricing implemented) — see the NotConnected
+  // panels below for the other brokers and for the further steps (OHLC
+  // aggregation, indicators) this doesn't cover yet.
+  const stream = useOandaStream(broker === 'oanda' ? symbol : '')
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault()
@@ -106,9 +113,55 @@ export function Market() {
         </p>
       </Card>
 
+      {broker === 'oanda' && (
+        <Card>
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-fg-muted">
+              Live price stream — {symbol}
+            </h2>
+            <span
+              className={`rounded-full px-2.5 py-1 text-xs ${
+                stream.connected ? 'bg-bull/15 text-bull' : 'bg-bear/15 text-bear'
+              }`}
+            >
+              {stream.connected ? 'Live' : 'Connecting…'}
+            </span>
+          </div>
+
+          {stream.error && <p className="text-sm text-bear">{stream.error}</p>}
+
+          {stream.tick ? (
+            <div className="flex flex-wrap gap-8">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-fg-muted">Bid</div>
+                <div className="text-xl font-bold text-bear">{stream.tick.bid}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wide text-fg-muted">Ask</div>
+                <div className="text-xl font-bold text-bull">{stream.tick.ask}</div>
+              </div>
+              <div>
+                <div className="text-xs uppercase tracking-wide text-fg-muted">Last update</div>
+                <div className="text-xl font-bold text-fg">
+                  {new Date(stream.tick.timestamp).toLocaleTimeString()}
+                </div>
+              </div>
+            </div>
+          ) : (
+            !stream.error && <p className="text-sm text-fg-muted">Waiting for the first tick…</p>
+          )}
+
+          <p className="mt-4 text-xs text-fg-muted">
+            Real WebSocket stream from OANDA's v20 pricing API (GET /ws/quotes on the gateway) — updates
+            push automatically, no refresh needed. Forex trades ~24/5; outside market hours you'll see
+            the last traded price and no further updates.
+          </p>
+        </Card>
+      )}
+
       <NotConnected
-        title="Streaming candlesticks"
-        requires="a Go WebSocket streaming service (planned: cmd/data_pipeline) — the lookup above is a REST snapshot, not a tick stream"
+        title="Candlestick chart"
+        requires="turning the tick stream above into time-bucketed OHLC bars and rendering them — the live feed exists, aggregation and charting don't yet"
       />
 
       <NotConnected
@@ -118,7 +171,7 @@ export function Market() {
 
       <NotConnected
         title="Technical indicator overlay (VWAP, EMA, Bollinger Bands)"
-        requires="a real tick history to compute over — nothing to chart without the streaming feed above"
+        requires="computing over the live tick stream above — the feed exists, the indicator math isn't wired up yet"
       />
     </div>
   )

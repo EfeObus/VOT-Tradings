@@ -71,6 +71,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/orders", s.requireAuth(s.handleCreateOrder))
 	mux.HandleFunc("GET /api/v1/orders", s.requireAuth(s.handleListOrders))
 
+	// Not wrapped in requireAuth: the WS handshake needs a plain HTTP error
+	// on auth failure, not a JSON body, so it authenticates itself inline.
+	mux.HandleFunc("GET /ws/quotes", s.handleStreamQuotes)
+
 	return s.withCORS(mux)
 }
 
