@@ -1,7 +1,9 @@
 import type {
   BalanceResponse,
   BrokerCredentialStatus,
+  CreateOrderRequest,
   HealthStatus,
+  Order,
   Quote,
   User,
 } from './types'
@@ -100,4 +102,14 @@ export function importEnvCredentials(): Promise<{ imported: string[] }> {
   return request<{ imported: string[] }>('/api/v1/broker-credentials/import-env', {
     method: 'POST',
   })
+}
+
+// Places a real order against one of the user's connected brokers. If that
+// broker's credentials point at a live account, this executes a real trade.
+export function createOrder(order: CreateOrderRequest): Promise<Order> {
+  return postJSON<Order>('/api/v1/orders', order)
+}
+
+export function listOrders(): Promise<Order[]> {
+  return request<Order[]>('/api/v1/orders')
 }

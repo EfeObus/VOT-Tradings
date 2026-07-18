@@ -44,12 +44,12 @@ Defined in `src/index.css` via Tailwind v4's `@theme`: `--color-canvas` (#0B0E14
 |---|---|
 | `/login`, `/register` | Real — backed by `internal/auth` (bcrypt + Redis sessions), not a cosmetic form |
 | `/profile` | Real — shows the signed-in user, and lets them connect/disconnect their own Alpaca/OANDA/Questrade credentials (`POST/DELETE /api/v1/broker-credentials`), encrypted server-side |
-| `/dashboard` | Real — NAV, cross-border split, allocation chart, all from the authenticated user's own `/api/v1/balance` |
+| `/dashboard` | Real — NAV, cross-border split, allocation chart from the authenticated user's own `/api/v1/balance`. Shows an explicit "no brokers connected yet" prompt instead of a blank screen when the user has none — no internal infra status (Postgres/Redis/etc.) is shown here, that's not user-facing information |
 | `/settings` | Real — broker connectivity audit from the same endpoint |
 | `/market/:symbol` | Real on-demand quote lookup (`GET /api/v1/quote`) against one of the user's connected brokers — a REST snapshot, not a stream. Candlesticks/L2/indicators below it show `NotConnected` |
-| `/trade` | Cash-by-currency is real; the order ticket and PDT shield show `NotConnected` — needs an order-execution HTTP endpoint |
+| `/trade` | Real — cash-by-currency, and a real order ticket (`POST /api/v1/orders`) gated behind an explicit "this may execute a real trade" confirmation checkbox. TWAP/VWAP/RL-routing options show `NotConnected` |
 | `/funds` | Real external links to each broker's own funding portal — deposits/withdrawals aren't reimplemented in-app, deliberately (see root README) |
 | `/forecasts` | Layout only — needs the Python DL engine (`services/dl_engine`, currently empty) |
-| `/reports` | Layout only — needs orders to actually be persisted, which needs the order-execution API first |
+| `/reports` | Real order history table (`GET /api/v1/orders`). P/L statements show `NotConnected` — needs historical price data to mark positions against |
 
-Nothing in this app fabricates data for a feature the backend doesn't support — see each page's `NotConnected` panels for exactly what's missing and where.
+Nothing in this app fabricates data for a feature the backend doesn't support — see each page's `NotConnected` panels for exactly what's missing and where. The order ticket on `/trade` is the one screen that can move real money if a connected broker points at a live account — its confirmation checkbox exists for that reason, not as friction for its own sake.

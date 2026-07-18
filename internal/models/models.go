@@ -74,7 +74,7 @@ type Position struct {
 // Order represents a single order lifecycle record routed to a broker.
 type Order struct {
 	ID          string      `json:"id" db:"id"`
-	AccountID   string      `json:"account_id" db:"account_id"`
+	UserID      string      `json:"user_id" db:"user_id"`
 	Broker      BrokerName  `json:"broker" db:"broker"`
 	Symbol      string      `json:"symbol" db:"symbol"`
 	Side        OrderSide   `json:"side" db:"side"`
@@ -107,7 +107,8 @@ type Prediction struct {
 // session) for Pattern Day Trader rolling-5-business-day compliance.
 type DayTrade struct {
 	ID        string    `json:"id" db:"id"`
-	AccountID string    `json:"account_id" db:"account_id"`
+	UserID    string    `json:"user_id" db:"user_id"`
+	Broker    BrokerName `json:"broker" db:"broker"`
 	Symbol    string    `json:"symbol" db:"symbol"`
 	TradeDate time.Time `json:"trade_date" db:"trade_date"`
 }

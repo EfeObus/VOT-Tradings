@@ -32,6 +32,8 @@ type Server struct {
 	Sessions    *auth.SessionStore
 	Credentials *db.CredentialStore
 	Brokers     *userbrokers.Factory
+	Orders      *db.OrderStore
+	DayTrades   *db.DayTradeStore
 
 	// AssetsDir is the directory brand assets (e.g. logo.png) are served
 	// from. See assets/logo.png — the single canonical app logo; the web
@@ -65,6 +67,9 @@ func (s *Server) Routes() http.Handler {
 
 	mux.HandleFunc("GET /api/v1/balance", s.requireAuth(s.handleBalance))
 	mux.HandleFunc("GET /api/v1/quote", s.requireAuth(s.handleQuote))
+
+	mux.HandleFunc("POST /api/v1/orders", s.requireAuth(s.handleCreateOrder))
+	mux.HandleFunc("GET /api/v1/orders", s.requireAuth(s.handleListOrders))
 
 	return s.withCORS(mux)
 }

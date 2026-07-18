@@ -31,14 +31,14 @@ func businessDaysBack(from time.Time, days int) time.Time {
 	return d
 }
 
-// CountDayTradesInWindow counts how many day trades an account has executed
-// within the trailing 5-business-day window ending at asOf.
-func CountDayTradesInWindow(trades []models.DayTrade, accountID string, asOf time.Time) int {
+// CountDayTradesInWindow counts how many day trades a user has executed at
+// broker within the trailing 5-business-day window ending at asOf.
+func CountDayTradesInWindow(trades []models.DayTrade, userID string, broker models.BrokerName, asOf time.Time) int {
 	windowStart := businessDaysBack(asOf, 5)
 
 	count := 0
 	for _, t := range trades {
-		if t.AccountID != accountID {
+		if t.UserID != userID || t.Broker != broker {
 			continue
 		}
 		if !t.TradeDate.Before(windowStart) && !t.TradeDate.After(asOf) {
@@ -60,12 +60,12 @@ type PDTCheckResult struct {
 // is at or past the FINRA day-trade limit for the rolling 5-business-day
 // window. Accounts at or above the threshold are never restricted by this
 // rule.
-func CheckPDT(account models.Account, trades []models.DayTrade, asOf time.Time) PDTCheckResult {
+func CheckPDT(account models.Account, userID string, broker models.BrokerName, trades []models.DayTrade, asOf time.Time) PDTCheckResult {
 	if account.Equity >= PDTEquityThreshold {
 		return PDTCheckResult{Restricted: false}
 	}
 
-	count := CountDayTradesInWindow(trades, account.ID, asOf)
+	count := CountDayTradesInWindow(trades, userID, broker, asOf)
 	if count >= PDTDayTradeLimit {
 		return PDTCheckResult{
 			Restricted:        true,

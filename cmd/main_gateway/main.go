@@ -66,6 +66,8 @@ func main() {
 	credentials := db.NewCredentialStore(pgPool, credentialBox)
 	tokens := db.NewOAuthTokenStore(pgPool)
 	brokerFactory := userbrokers.NewFactory(credentials, tokens)
+	orders := db.NewOrderStore(pgPool)
+	dayTrades := db.NewDayTradeStore(pgPool)
 
 	srv := &httpapi.Server{
 		DB:             pgPool,
@@ -76,6 +78,8 @@ func main() {
 		Sessions:       sessions,
 		Credentials:    credentials,
 		Brokers:        brokerFactory,
+		Orders:         orders,
+		DayTrades:      dayTrades,
 		AssetsDir:      assetsDir,
 		AllowedOrigins: cfg.CORSAllowedOrigins,
 	}

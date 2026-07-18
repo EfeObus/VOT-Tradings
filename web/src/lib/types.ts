@@ -57,3 +57,30 @@ export interface BrokerCredentialStatus {
   broker: BrokerName
   connected: boolean
 }
+
+export type OrderSide = 'buy' | 'sell'
+export type OrderType = 'market' | 'limit'
+
+export interface CreateOrderRequest {
+  broker: BrokerName
+  symbol: string
+  side: OrderSide
+  type: OrderType
+  quantity: number
+  limit_price?: number
+}
+
+export interface Order {
+  id: string
+  user_id: string
+  broker: BrokerName
+  symbol: string
+  side: OrderSide
+  type: OrderType
+  quantity: number
+  limit_price?: number
+  status: string
+  broker_order_id?: string
+  created_at: string
+  updated_at: string
+}
